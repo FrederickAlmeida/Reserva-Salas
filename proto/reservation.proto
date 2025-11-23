@@ -1,0 +1,85 @@
+syntax = "proto3";
+
+package booking.v1;
+
+// Troque "github.com/seu_usuario/booking-system" pelo module do seu go.mod
+option go_package = "github.com/FrederickAlmeida/Reserva-Salas/proto;bookingpb";
+
+enum ReservationStatus {
+  RESERVATION_STATUS_UNSPECIFIED = 0;
+  PENDENTE_CONFIRMACAO = 1;
+  CONFIRMADA = 2;
+  CANCELADA = 3;
+  EXPIRADA = 4;
+}
+
+message TimeSlot {
+  // "HH:MM" (ex: "09:00", "09:30")
+  string start_time = 1;
+  string end_time = 2;
+}
+
+message Reservation {
+  string id = 1;
+  string room_id = 2;
+  string date = 3;        // "YYYY-MM-DD"
+  string start_time = 4;  // "HH:MM"
+  string end_time = 5;    // "HH:MM"
+  ReservationStatus status = 6;
+  string created_at = 7;  // ISO 8601 em string
+}
+
+// 1. ListAvailable
+message ListAvailableRequest {
+  string date = 1; // "YYYY-MM-DD"
+}
+
+message RoomAvailability {
+  string room_id = 1;
+  repeated TimeSlot free_slots = 2;
+}
+
+message ListAvailableResponse {
+  repeated RoomAvailability rooms = 1;
+}
+
+// 2. CreateReservation
+message CreateReservationRequest {
+  string room_id = 1;
+  string date = 2;        // "YYYY-MM-DD"
+  string start_time = 3;  // "HH:MM"
+  string end_time = 4;    // "HH:MM"
+}
+
+message CreateReservationResponse {
+  string reservation_id = 1;
+  ReservationStatus status = 2;
+  string message = 3;
+}
+
+// 3. CancelReservation
+message CancelReservationRequest {
+  string reservation_id = 1;
+}
+
+message CancelReservationResponse {
+  ReservationStatus status = 1;
+  string message = 2;
+}
+
+// 4. ConfirmReservation
+message ConfirmReservationRequest {
+  string reservation_id = 1;
+}
+
+message ConfirmReservationResponse {
+  ReservationStatus status = 1;
+  string message = 2;
+}
+
+service ReservationService {
+  rpc ListAvailable(ListAvailableRequest) returns (ListAvailableResponse);
+  rpc CreateReservation(CreateReservationRequest) returns (CreateReservationResponse);
+  rpc CancelReservation(CancelReservationRequest) returns (CancelReservationResponse);
+  rpc ConfirmReservation(ConfirmReservationRequest) returns (ConfirmReservationResponse);
+}
