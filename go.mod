@@ -3,6 +3,7 @@ module github.com/FrederickAlmeida/Reserva-Salas
 go 1.25.1
 
 require (
+	github.com/rabbitmq/amqp091-go v1.10.0
 	google.golang.org/grpc v1.77.0
 	google.golang.org/protobuf v1.36.10
 )
