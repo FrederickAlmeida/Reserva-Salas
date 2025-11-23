@@ -22,12 +22,15 @@ type reservationServer struct {
 }
 
 func (s *reservationServer) ListAvailable(ctx context.Context, req *bookingpb.ListAvailableRequest) (*bookingpb.ListAvailableResponse, error) {
+	log.Printf("[gRPC] ListAvailable request received - date: %s", req.GetDate())
 	if req.GetDate() == "" {
+		log.Printf("[gRPC] ListAvailable error: date is required")
 		return nil, status.Error(codes.InvalidArgument, "date is required")
 	}
 
 	avail, err := s.agenda.ListAvailable(ctx, req.GetDate())
 	if err != nil {
+		log.Printf("[gRPC] ListAvailable error: %v", err)
 		return nil, statusFromDomainError(err)
 	}
 
@@ -44,19 +47,25 @@ func (s *reservationServer) ListAvailable(ctx context.Context, req *bookingpb.Li
 		}
 		resp.Rooms = append(resp.Rooms, ra)
 	}
+	log.Printf("[gRPC] ListAvailable success - found %d rooms", len(resp.Rooms))
 	return resp, nil
 }
 
 func (s *reservationServer) CreateReservation(ctx context.Context, req *bookingpb.CreateReservationRequest) (*bookingpb.CreateReservationResponse, error) {
+	log.Printf("[gRPC] CreateReservation request received - room: %s, date: %s, time: %s-%s",
+		req.GetRoomId(), req.GetDate(), req.GetStartTime(), req.GetEndTime())
 	if req.GetRoomId() == "" || req.GetDate() == "" || req.GetStartTime() == "" || req.GetEndTime() == "" {
+		log.Printf("[gRPC] CreateReservation error: missing required fields")
 		return nil, status.Error(codes.InvalidArgument, "room_id, date, start_time and end_time are required")
 	}
 
 	res, err := s.agenda.CreateReservation(ctx, req.GetRoomId(), req.GetDate(), req.GetStartTime(), req.GetEndTime())
 	if err != nil {
+		log.Printf("[gRPC] CreateReservation error: %v", err)
 		return nil, statusFromDomainError(err)
 	}
 
+	log.Printf("[gRPC] CreateReservation success - id: %s, status: %v", res.ID, res.Status)
 	return &bookingpb.CreateReservationResponse{
 		ReservationId: res.ID,
 		Status:        toProtoStatus(res.Status),
@@ -65,15 +74,19 @@ func (s *reservationServer) CreateReservation(ctx context.Context, req *bookingp
 }
 
 func (s *reservationServer) CancelReservation(ctx context.Context, req *bookingpb.CancelReservationRequest) (*bookingpb.CancelReservationResponse, error) {
+	log.Printf("[gRPC] CancelReservation request received - id: %s", req.GetReservationId())
 	if req.GetReservationId() == "" {
+		log.Printf("[gRPC] CancelReservation error: reservation_id is required")
 		return nil, status.Error(codes.InvalidArgument, "reservation_id is required")
 	}
 
 	res, err := s.agenda.CancelReservation(ctx, req.GetReservationId())
 	if err != nil {
+		log.Printf("[gRPC] CancelReservation error: %v", err)
 		return nil, statusFromDomainError(err)
 	}
 
+	log.Printf("[gRPC] CancelReservation success - id: %s, status: %v", req.GetReservationId(), res.Status)
 	return &bookingpb.CancelReservationResponse{
 		Status:  toProtoStatus(res.Status),
 		Message: "reserva cancelada",
@@ -81,15 +94,19 @@ func (s *reservationServer) CancelReservation(ctx context.Context, req *bookingp
 }
 
 func (s *reservationServer) ConfirmReservation(ctx context.Context, req *bookingpb.ConfirmReservationRequest) (*bookingpb.ConfirmReservationResponse, error) {
+	log.Printf("[gRPC] ConfirmReservation request received - id: %s", req.GetReservationId())
 	if req.GetReservationId() == "" {
+		log.Printf("[gRPC] ConfirmReservation error: reservation_id is required")
 		return nil, status.Error(codes.InvalidArgument, "reservation_id is required")
 	}
 
 	res, err := s.agenda.ConfirmReservation(ctx, req.GetReservationId())
 	if err != nil {
+		log.Printf("[gRPC] ConfirmReservation error: %v", err)
 		return nil, statusFromDomainError(err)
 	}
 
+	log.Printf("[gRPC] ConfirmReservation success - id: %s, status: %v", req.GetReservationId(), res.Status)
 	return &bookingpb.ConfirmReservationResponse{
 		Status:  toProtoStatus(res.Status),
 		Message: "reserva confirmada",
@@ -142,16 +159,18 @@ func main() {
 		addr = v
 	}
 
+	log.Println("[gRPC] Initializing reservation server...")
 	agenda := reservation.NewAgenda(reservation.RealClock{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	log.Println("[gRPC] Starting expiration worker...")
 	agenda.StartExpirationWorker(ctx, time.Minute)
 
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
-		log.Fatalf("failed to listen: %v", err)
+		log.Fatalf("[gRPC] failed to listen: %v", err)
 	}
 
 	grpcServer := grpc.NewServer()
@@ -159,9 +178,9 @@ func main() {
 	bookingpb.RegisterReservationServiceServer(grpcServer, srv)
 
 	go func() {
-		log.Printf("server listening at %s\n", addr)
+		log.Printf("[gRPC] Server listening at %s", addr)
 		if err := grpcServer.Serve(lis); err != nil {
-			log.Fatalf("failed to serve: %v", err)
+			log.Fatalf("[gRPC] failed to serve: %v", err)
 		}
 	}()
 
@@ -169,8 +188,8 @@ func main() {
 	stopCh := make(chan os.Signal, 1)
 	signal.Notify(stopCh, os.Interrupt, syscall.SIGTERM)
 	<-stopCh
-	log.Println("shutting down server...")
+	log.Println("[gRPC] Shutting down server...")
 	cancel()
 	grpcServer.GracefulStop()
-	log.Println("server stopped")
+	log.Println("[gRPC] Server stopped")
 }
