@@ -16,6 +16,7 @@ import (
 )
 
 func main() {
+	log.Println("[MQ] Initializing RabbitMQ worker...")
 	amqpURL := os.Getenv("AMQP_URL")
 	if amqpURL == "" {
 		amqpURL = "amqp://guest:guest@localhost:5672/"
@@ -26,27 +27,33 @@ func main() {
 		queueName = "booking.commands"
 	}
 
-	// domínio (mesma Agenda de antes)
+	log.Printf("[MQ] Connecting to RabbitMQ at %s", amqpURL)
+	log.Printf("[MQ] Queue name: %s", queueName)
+
+	// domínio
 	agenda := reservation.NewAgenda(reservation.RealClock{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// worker de expiração de reservas (igual gRPC)
+	// worker de expiração de reservas
+	log.Println("[MQ] Starting expiration worker...")
 	agenda.StartExpirationWorker(ctx, time.Minute)
 
 	// conexão com RabbitMQ
 	conn, err := amqp.Dial(amqpURL)
 	if err != nil {
-		log.Fatalf("failed to connect to RabbitMQ: %v", err)
+		log.Fatalf("[MQ] failed to connect to RabbitMQ: %v", err)
 	}
 	defer conn.Close()
+	log.Println("[MQ] Connected to RabbitMQ")
 
 	ch, err := conn.Channel()
 	if err != nil {
-		log.Fatalf("failed to open channel: %v", err)
+		log.Fatalf("[MQ] failed to open channel: %v", err)
 	}
 	defer ch.Close()
+	log.Println("[MQ] Channel opened")
 
 	_, err = ch.QueueDeclare(
 		queueName,
@@ -57,8 +64,9 @@ func main() {
 		nil,
 	)
 	if err != nil {
-		log.Fatalf("failed to declare queue: %v", err)
+		log.Fatalf("[MQ] failed to declare queue: %v", err)
 	}
+	log.Printf("[MQ] Queue declared: %s", queueName)
 
 	msgs, err := ch.Consume(
 		queueName,
@@ -70,10 +78,10 @@ func main() {
 		nil,
 	)
 	if err != nil {
-		log.Fatalf("failed to register consumer: %v", err)
+		log.Fatalf("[MQ] failed to register consumer: %v", err)
 	}
 
-	log.Printf("MQ worker listening on queue %s", queueName)
+	log.Printf("[MQ] Worker listening on queue %s", queueName)
 
 	// captura sinais para shutdown gracioso
 	stopCh := make(chan os.Signal, 1)
@@ -86,26 +94,28 @@ func main() {
 	}()
 
 	<-stopCh
-	log.Println("shutting down mq-worker...")
+	log.Println("[MQ] Shutting down worker...")
 	cancel()
 	time.Sleep(500 * time.Millisecond)
-	log.Println("mq-worker stopped")
+	log.Println("[MQ] Worker stopped")
 }
 
 func handleDelivery(parentCtx context.Context, d *amqp.Delivery, ch *amqp.Channel, agenda *reservation.Agenda) {
 	defer func() {
 		// sempre dá ack pra não ficar reentregando infinitamente
 		if err := d.Ack(false); err != nil {
-			log.Printf("failed to ack message: %v", err)
+			log.Printf("[MQ] failed to ack message: %v", err)
 		}
 	}()
 
 	var env mq.CommandEnvelope
 	if err := json.Unmarshal(d.Body, &env); err != nil {
-		log.Printf("invalid command envelope: %v", err)
+		log.Printf("[MQ] invalid command envelope: %v", err)
 		sendErrorResponse(parentCtx, ch, d, "invalid command format: "+err.Error())
 		return
 	}
+
+	log.Printf("[MQ] Received command: %s", env.Type)
 
 	ctx, cancel := context.WithTimeout(parentCtx, 5*time.Second)
 	defer cancel()
@@ -120,7 +130,7 @@ func handleDelivery(parentCtx context.Context, d *amqp.Delivery, ch *amqp.Channe
 	case mq.CommandConfirmReservation:
 		handleConfirmReservation(ctx, env.Payload, ch, d, agenda)
 	default:
-		log.Printf("unknown command type: %s", env.Type)
+		log.Printf("[MQ] unknown command type: %s", env.Type)
 		sendErrorResponse(ctx, ch, d, "unknown command type: "+string(env.Type))
 	}
 }
@@ -132,7 +142,7 @@ func sendResponse(ctx context.Context, ch *amqp.Channel, d *amqp.Delivery, resp 
 	}
 	body, err := json.Marshal(resp)
 	if err != nil {
-		log.Printf("failed to marshal response: %v", err)
+		log.Printf("[MQ] failed to marshal response: %v", err)
 		return
 	}
 
@@ -149,7 +159,9 @@ func sendResponse(ctx context.Context, ch *amqp.Channel, d *amqp.Delivery, resp 
 		},
 	)
 	if err != nil {
-		log.Printf("failed to publish response: %v", err)
+		log.Printf("[MQ] failed to publish response: %v", err)
+	} else {
+		log.Printf("[MQ] Response sent - type: %s, ok: %v", resp.Type, resp.OK)
 	}
 }
 
@@ -167,16 +179,20 @@ func sendErrorResponse(ctx context.Context, ch *amqp.Channel, d *amqp.Delivery, 
 func handleListAvailable(ctx context.Context, payload json.RawMessage, ch *amqp.Channel, d *amqp.Delivery, agenda *reservation.Agenda) {
 	var req mq.ListAvailablePayload
 	if err := json.Unmarshal(payload, &req); err != nil {
+		log.Printf("[MQ] ListAvailable - invalid payload: %v", err)
 		sendErrorResponse(ctx, ch, d, "invalid payload: "+err.Error())
 		return
 	}
 	if req.Date == "" {
+		log.Printf("[MQ] ListAvailable - date is required")
 		sendErrorResponse(ctx, ch, d, "date is required")
 		return
 	}
 
+	log.Printf("[MQ] ListAvailable - date: %s", req.Date)
 	avail, err := agenda.ListAvailable(ctx, req.Date)
 	if err != nil {
+		log.Printf("[MQ] ListAvailable error: %v", err)
 		sendErrorResponse(ctx, ch, d, err.Error())
 		return
 	}
@@ -204,22 +220,27 @@ func handleListAvailable(ctx context.Context, payload json.RawMessage, ch *amqp.
 		Type:    "ListAvailableResponse",
 		Payload: payloadBytes,
 	}
+	log.Printf("[MQ] ListAvailable success - found %d rooms", len(rooms))
 	sendResponse(ctx, ch, d, resp)
 }
 
 func handleCreateReservation(ctx context.Context, payload json.RawMessage, ch *amqp.Channel, d *amqp.Delivery, agenda *reservation.Agenda) {
 	var req mq.CreateReservationPayload
 	if err := json.Unmarshal(payload, &req); err != nil {
+		log.Printf("[MQ] CreateReservation - invalid payload: %v", err)
 		sendErrorResponse(ctx, ch, d, "invalid payload: "+err.Error())
 		return
 	}
 	if req.RoomID == "" || req.Date == "" || req.StartTime == "" || req.EndTime == "" {
+		log.Printf("[MQ] CreateReservation - missing required fields")
 		sendErrorResponse(ctx, ch, d, "room_id, date, start_time and end_time are required")
 		return
 	}
 
+	log.Printf("[MQ] CreateReservation - room: %s, date: %s, time: %s-%s", req.RoomID, req.Date, req.StartTime, req.EndTime)
 	res, err := agenda.CreateReservation(ctx, req.RoomID, req.Date, req.StartTime, req.EndTime)
 	if err != nil {
+		log.Printf("[MQ] CreateReservation error: %v", err)
 		sendErrorResponse(ctx, ch, d, err.Error())
 		return
 	}
@@ -236,22 +257,27 @@ func handleCreateReservation(ctx context.Context, payload json.RawMessage, ch *a
 		Type:    "CreateReservationResponse",
 		Payload: payloadBytes,
 	}
+	log.Printf("[MQ] CreateReservation success - id: %s, status: %s", res.ID, reservationStatusToString(res.Status))
 	sendResponse(ctx, ch, d, resp)
 }
 
 func handleCancelReservation(ctx context.Context, payload json.RawMessage, ch *amqp.Channel, d *amqp.Delivery, agenda *reservation.Agenda) {
 	var req mq.CancelReservationPayload
 	if err := json.Unmarshal(payload, &req); err != nil {
+		log.Printf("[MQ] CancelReservation - invalid payload: %v", err)
 		sendErrorResponse(ctx, ch, d, "invalid payload: "+err.Error())
 		return
 	}
 	if req.ReservationID == "" {
+		log.Printf("[MQ] CancelReservation - reservation_id is required")
 		sendErrorResponse(ctx, ch, d, "reservation_id is required")
 		return
 	}
 
+	log.Printf("[MQ] CancelReservation - id: %s", req.ReservationID)
 	res, err := agenda.CancelReservation(ctx, req.ReservationID)
 	if err != nil {
+		log.Printf("[MQ] CancelReservation error: %v", err)
 		sendErrorResponse(ctx, ch, d, err.Error())
 		return
 	}
@@ -267,22 +293,27 @@ func handleCancelReservation(ctx context.Context, payload json.RawMessage, ch *a
 		Type:    "CancelReservationResponse",
 		Payload: payloadBytes,
 	}
+	log.Printf("[MQ] CancelReservation success - id: %s, status: %s", req.ReservationID, reservationStatusToString(res.Status))
 	sendResponse(ctx, ch, d, resp)
 }
 
 func handleConfirmReservation(ctx context.Context, payload json.RawMessage, ch *amqp.Channel, d *amqp.Delivery, agenda *reservation.Agenda) {
 	var req mq.ConfirmReservationPayload
 	if err := json.Unmarshal(payload, &req); err != nil {
+		log.Printf("[MQ] ConfirmReservation - invalid payload: %v", err)
 		sendErrorResponse(ctx, ch, d, "invalid payload: "+err.Error())
 		return
 	}
 	if req.ReservationID == "" {
+		log.Printf("[MQ] ConfirmReservation - reservation_id is required")
 		sendErrorResponse(ctx, ch, d, "reservation_id is required")
 		return
 	}
 
+	log.Printf("[MQ] ConfirmReservation - id: %s", req.ReservationID)
 	res, err := agenda.ConfirmReservation(ctx, req.ReservationID)
 	if err != nil {
+		log.Printf("[MQ] ConfirmReservation error: %v", err)
 		sendErrorResponse(ctx, ch, d, err.Error())
 		return
 	}
@@ -298,6 +329,7 @@ func handleConfirmReservation(ctx context.Context, payload json.RawMessage, ch *
 		Type:    "ConfirmReservationResponse",
 		Payload: payloadBytes,
 	}
+	log.Printf("[MQ] ConfirmReservation success - id: %s, status: %s", req.ReservationID, reservationStatusToString(res.Status))
 	sendResponse(ctx, ch, d, resp)
 }
 

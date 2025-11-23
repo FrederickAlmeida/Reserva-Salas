@@ -8,7 +8,7 @@ import (
 )
 
 type Agenda struct {
-	mu    sync.RWMutex
+	mu     sync.RWMutex
 	byDate map[string]map[string][]*Reservation // date -> room -> reservas
 	byID   map[string]*Reservation
 	rooms  []string
