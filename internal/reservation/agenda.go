@@ -72,7 +72,6 @@ func formatTimeOfDay(minutes int) string {
 	return fmt.Sprintf("%02d:%02d", h, m)
 }
 
-// CreateReservation cria uma reserva, garantindo ausência de conflito.
 func (a *Agenda) CreateReservation(ctx context.Context, roomID, date, startTime, endTime string) (*Reservation, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -142,7 +141,6 @@ func (a *Agenda) findReservationLocked(id string) (*Reservation, error) {
 	return res, nil
 }
 
-// CancelReservation cancela uma reserva, se ainda não estiver finalizada.
 func (a *Agenda) CancelReservation(ctx context.Context, id string) (*Reservation, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -202,7 +200,6 @@ func (a *Agenda) ConfirmReservation(ctx context.Context, id string) (*Reservatio
 	return res, nil
 }
 
-// ListAvailable retorna, para a data, os intervalos livres de cada sala.
 func (a *Agenda) ListAvailable(ctx context.Context, date string) (map[string][]TimeSlot, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
