@@ -66,3 +66,15 @@ go run ./cmd/mq-client confirm --id sala-101_2025-11-24_09:00_10:00
 # Cancelar reserva
 go run ./cmd/mq-client cancel --id sala-101_2025-11-24_09:00_10:00
 ```
+
+## Benchmark
+
+Ferramenta para comparar desempenho entre gRPC e RabbitMQ.
+
+```bash
+# Teste de performance (throughput e latência)
+go run ./cmd/benchmark performance
+
+# Teste de fator de negócio (validação de corretude sob concorrência)
+go run ./cmd/benchmark business
+```
